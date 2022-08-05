@@ -8,7 +8,6 @@ datetime_with_tz = datetime.datetime.now(tz=tz)
 
 
 class VacanciesPerSpecialization(mongoengine.EmbeddedDocument):
-    user_id = mongoengine.ObjectIdField()
     selected_language = mongoengine.StringField()
     djinni_vacancies = mongoengine.ListField()
     dou_vacancies = mongoengine.ListField()
