@@ -1,12 +1,15 @@
 import logging
+import os
+from datetime import datetime
 
 import mongoengine
 from aiogram import executor, types
 from aiogram.dispatcher.filters import Text
 
-from scrape_em_all.config import dispatcher
-from scrape_em_all.helpers import register_new_user
-from scrape_em_all.models import User
+from scrape_em_all.config import app, bot, dispatcher
+from scrape_em_all.helpers import get_user_or_exception, register_new_user
+from scrape_em_all.models import BaseVacancy, DjinniVacancies, User
+from scrape_em_all.tasks import scheduled_djinni_parsing
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,7 +33,7 @@ async def greet(message: types.Message):
 
     else:
         await message.answer(
-            "Heyo! I'm a Scrape'em all bot. I will help you with finding desired jobs in Ukrainian IT segment.\nCurrently supported: djinni.co, jobs.dou.ua, robota.ua, work.ua",
+            "Heyo! I'm a Scrape'em all bot. I will help you with finding desired jobs in Ukrainian IT segment.\nCurrently supported: djinni.co, jobs.dou.ua, robota.ua, work.ua\nParces Python vacancies with 1 year exp (depending on filters of parsed websites)",
             reply_markup=commands_keyboard,
         )
 
@@ -53,13 +56,45 @@ async def subscribe_to_scheduled_parsing(messsage: types.Message):
     )
 
 
-@dispatcher.message_handler(Text(equals="User"))
+@dispatcher.message_handler(commands=["debug"])
 async def debug_queries(message: types.Message):
-    user_data = User.objects(username=message.chat.username).first()
-    print(user_data)
-    await message.reply(f"{user_data}")
+    user: User = User.objects.get(username=message.chat.username)
+    djinni = DjinniVacancies()
+    new_vacancy = BaseVacancy()
+    new_vacancy.title = "some"
+    new_vacancy.link = "idk"
+    new_vacancy.short_description = "asd"
+    new_vacancy.ad_posted_at = datetime.now()
+    djinni.user = user
+    djinni.vacancies.append(new_vacancy)
+    djinni.save()
+    print(DjinniVacancies.objects.filter(vacancies__link="idk", user=user))
+    await message.reply("Added new debug line")
+
+
+@dispatcher.message_handler(commands=["celery"])
+async def test_celery_task_parse(message: types.Message):
+    await message.reply("Celery task started")
+    logging.info(f"Celery task started by {message.chat.username}")
+    user = get_user_or_exception(username=message.chat.username)
+    try:
+        # result = scheduled_djinni_parsing.delay(telegram_username=user.username)
+        # print(result.get())
+        app.add_periodic_task(60, scheduled_djinni_parsing, (user.username,))
+        await message.reply("Task finished successfully")
+        logging.info("Celery task finished")
+    except Exception as e:
+        await bot.send_message(message.chat.id, f"There was an error: {str(e)}")
+        logging.error(repr(e))
+
+    return
 
 
 if __name__ == "__main__":
-    mongoengine.register_connection(alias="core", name="scrape_em_db")
+    mongoengine.register_connection(
+        alias="core",
+        host=os.environ.get("MONGO_HOST"),
+        port=int(os.environ.get("MONGO_PORT")),
+        name=os.environ.get("DB_NAME"),
+    )
     executor.start_polling(dispatcher, skip_updates=True)
