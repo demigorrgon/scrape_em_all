@@ -14,8 +14,15 @@ tz = pytz.timezone("Europe/Kiev")
 
 bot = Bot(token=os.environ.get("BOT_TOKEN"))
 dispatcher = Dispatcher(bot)
-
-# r = redis.Redis(host=os.environ.get("REDIS_HOST", port=6379, db=0))
-
-mongo_connection = mongoengine.register_connection(alias="core", name="scrape_em_db")
-app = Celery("scrape_em_all", broker="redis://0.0.0.0:6379//0")
+mongo_connection = mongoengine.register_connection(
+    alias="core",
+    host=os.environ.get("MONGO_HOST"),
+    port=int(os.environ.get("MONGO_PORT")),
+    name=os.environ.get("DB_NAME"),
+)
+app = Celery(
+    "scrape_em_all",
+    backend=f"redis://{os.environ.get('REDIS_HOST')}:6379//0",
+    broker=f"redis://{os.environ.get('REDIS_HOST')}:6379//0",
+)
+app.autodiscover_tasks()
