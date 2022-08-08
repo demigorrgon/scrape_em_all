@@ -1,5 +1,6 @@
 import asyncio
 import re
+from collections import namedtuple
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -10,7 +11,7 @@ from scrape_em_all.helpers import (
     date_in_ukrainian_to_datetime,
     get_user_or_exception,
 )
-from scrape_em_all.models import DjinniVacancies
+from scrape_em_all.models import DjinniVacancies, DouVacancies
 
 
 class DjinniScraper:
@@ -66,18 +67,13 @@ class DjinniScraper:
                             ad_posted_at=ad_posted_at,
                         )
                         new_vacancy.save()
-                        print(new_vacancy)
-                        if self.user.has_parsed:
+                        if self.user.has_parsed_djinni:
                             # send notifications only after initial parse
                             await bot.send_message(
                                 self.user.telegram_id,
                                 f"Found new vacancy: \n{title}, djinni.co{link}\n{short_description}",
                             )
-                await bot.send_message(
-                    self.user.telegram_id,
-                    f"{DjinniVacancies.objects(parsed_by=self.user).count()} opened vacancies on djinni atm",
-                )
-                self.user.has_parsed = True
+                self.user.has_parsed_djinni = True
                 self.user.save()
                 return
 
@@ -124,17 +120,53 @@ class DouScraper(DjinniScraper):
             async with session.get(self.url) as response:
                 page = await response.text()
                 soup = BeautifulSoup(page, "html.parser")
-                ad_headers = soup.find_all("a", {"class": "vt"})
-                print(ad_headers)
 
-    async def parse_page(self):
-        pass
+                ad_titles = [
+                    self.clean_from_escape_characters(ad.text.strip())
+                    for ad in soup.find_all("a", {"class": "vt"})
+                ]
+                ad_dates = [
+                    self.clean_from_escape_characters(ad.text.strip())
+                    for ad in soup.find_all("div", {"class": "date"})
+                ]
+                ad_descriptions = [
+                    self.clean_from_escape_characters(ad.text.strip())
+                    for ad in soup.find_all("div", {"class": "sh-info"})
+                ]
+                ad_links = [ad["href"] for ad in soup.find_all("a", {"class": "vt"})]
+                ads = list(zip(ad_titles, ad_links, ad_descriptions, ad_dates))
+                for ad in ads:
+                    ads_tuple = namedtuple("ads", "title link description date")
+                    data = ads_tuple(ad[0], ad[1], ad[2], ad[3])
+                    if check_if_parsed_entry_exists_in_db(DouVacancies, self.user, ad):
+                        continue
+                    new_dou_vacancy = DouVacancies(
+                        parsed_by=self.user,
+                        title=data.title,
+                        link=data.link,
+                        short_description=data.description,
+                        ad_posted_at=date_in_ukrainian_to_datetime(data.date),
+                    )
+                    new_dou_vacancy.save()
+                    if self.user.has_parsed_dou:
+                        # send notifications only after initial parse
+                        await bot.send_message(
+                            self.user.telegram_id,
+                            f"Found new vacancy: \n{data.title}\nposted at: {data.date}\n{data.link}\n{data.description}",
+                        )
+
+                self.user.has_parsed_dou = True
+                self.user.save()
+                return
+
+    def clean_from_escape_characters(self, string):
+        return re.sub(r"\xa0|\n", " ", string)
 
 
 # if __name__ == "__main__":
 #     # start = datetime.now()
 #     djinni = DjinniScraper(telegram_username="demigorrgon")
-#     # dou = DouScraper(telegram_username="demigorrgon")
+# dou = DouScraper(telegram_username="demigorrgon")
 #     asyncio.run(djinni.fetch())
 # asyncio.run(dou.fetch())
 
