@@ -1,15 +1,16 @@
+import asyncio
 import logging
 import os
-from datetime import datetime
 
 import mongoengine
 from aiogram import executor, types
 from aiogram.dispatcher.filters import Text
 
 from scrape_em_all.config import app, bot, dispatcher
-from scrape_em_all.helpers import get_user_or_exception, register_new_user
-from scrape_em_all.models import BaseVacancy, DjinniVacancies, User
-from scrape_em_all.tasks import scheduled_djinni_parsing
+from scrape_em_all.helpers import CeleryTaskManager, register_new_user
+
+# from scrape_em_all.models import BaseVacancy, DjinniVacancies, User
+from scrape_em_all.tasks import scheduled_djinni_parsing, scheduled_dou_parsing
 
 logging.basicConfig(level=logging.INFO)
 
@@ -56,38 +57,42 @@ async def subscribe_to_scheduled_parsing(messsage: types.Message):
     )
 
 
-@dispatcher.message_handler(commands=["debug"])
-async def debug_queries(message: types.Message):
-    user: User = User.objects.get(username=message.chat.username)
-    djinni = DjinniVacancies()
-    new_vacancy = BaseVacancy()
-    new_vacancy.title = "some"
-    new_vacancy.link = "idk"
-    new_vacancy.short_description = "asd"
-    new_vacancy.ad_posted_at = datetime.now()
-    djinni.user = user
-    djinni.vacancies.append(new_vacancy)
-    djinni.save()
-    print(DjinniVacancies.objects.filter(vacancies__link="idk", user=user))
-    await message.reply("Added new debug line")
-
-
 @dispatcher.message_handler(commands=["celery"])
 async def test_celery_task_parse(message: types.Message):
-    await message.reply("Celery task started")
     logging.info(f"Celery task started by {message.chat.username}")
-    user = get_user_or_exception(username=message.chat.username)
-    try:
-        # result = scheduled_djinni_parsing.delay(telegram_username=user.username)
-        # print(result.get())
-        app.add_periodic_task(60, scheduled_djinni_parsing, (user.username,))
-        await message.reply("Task finished successfully")
-        logging.info("Celery task finished")
-    except Exception as e:
-        await bot.send_message(message.chat.id, f"There was an error: {str(e)}")
-        logging.error(repr(e))
+    # try:
+    await message.reply("Parsing started")
+    djinni_task = scheduled_djinni_parsing.delay(message.chat.username)
+    CeleryTaskManager(message.chat.username).add_to_storage(
+        "djinni_task_id", djinni_task.id
+    )
+    await asyncio.sleep(3)
+    dou_task = scheduled_dou_parsing.delay(message.chat.username)
+    CeleryTaskManager(message.chat.username).add_to_storage("dou_task_id", dou_task.id)
+
+    # except Exception as e:
+    #     await bot.send_message(message.chat.id, f"There was an error: {str(e)}")
+    #     logging.error(repr(e))
 
     return
+
+
+@dispatcher.message_handler(commands=["break"])
+async def break_from_parsing(message: types.Message):
+    try:
+        current_user_tasks = CeleryTaskManager(message.chat.username)
+        djinni_task = current_user_tasks.retrieve_task("djinni_task_id")
+        dou_task = current_user_tasks.retrieve_task("dou_task_id")
+
+    except KeyError:
+        await message.reply("You aren't subscribed to parsing rn. Hint: /celery atm")
+        return
+    await message.reply("Hold on, we are stopping")
+    app.control.revoke(djinni_task, terminate=True, signal="SIGKILL")
+    app.control.revoke(dou_task, terminate=True, signal="SIGKILL")
+
+    current_user_tasks.clear_tasks_from_storage()
+    await bot.send_message(message.chat.id, "Parsing stopped")
 
 
 if __name__ == "__main__":
