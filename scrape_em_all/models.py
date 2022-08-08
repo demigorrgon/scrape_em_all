@@ -10,7 +10,10 @@ datetime_with_tz = datetime.datetime.now(tz=tz)
 class User(mongoengine.Document):
     username = mongoengine.StringField(required=True)
     telegram_id = mongoengine.StringField(required=True)
-    has_parsed = mongoengine.BooleanField(default=False)
+    has_parsed_djinni = mongoengine.BooleanField(default=False)
+    has_parsed_dou = mongoengine.BooleanField(default=False)
+    has_parsed_robota = mongoengine.BooleanField(default=False)
+    has_parsed_workua = mongoengine.BooleanField(default=False)
     first_interaction_with_bot = mongoengine.DateTimeField(
         default=datetime_with_tz,
     )
@@ -44,11 +47,12 @@ class DjinniVacancies(BaseVacancy):
     }
 
 
-# class DouVacancies(DjinniVacancies):
-#     meta = {
-#         "db_alias": "core",
-#         "collection": "dou",
-#     }
+class DouVacancies(BaseVacancy):
+    meta = {
+        "db_alias": "core",
+        "collection": "dou",
+        "ordering": ["-ad_posted_at"],
+    }
 
 
 # class RobotaVacancies(DjinniVacancies):
