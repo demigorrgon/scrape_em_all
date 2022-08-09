@@ -1,0 +1,45 @@
+version: "3.9"
+services:
+  mongo:
+    image: mongo:latest
+    restart: always
+    volumes:
+      - mongodata:/data/db
+    ports:
+      - 27017:27017
+    command: --quiet
+
+  scrape_em_all_bot:
+    build: .
+    command: >
+      sh -c "export PYTHONPATH=$PYTHONPATH:`pwd` && python3 scrape_em_all/bot.py"
+
+    volumes:
+      - ./scrape_em_all:/scraper-bot/
+    env_file:
+      - .env-compose
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - MONGO_HOST=${MONGO_HOST}
+      - MONGO_PORT=${MONGO_PORT}
+      - DB_NAME=${DB_NAME}
+      - REDIS_HOST=${REDIS_HOST}
+    depends_on:
+      - mongo
+
+  celery:
+    build: .
+    command: celery -A scrape_em_all.tasks worker -l info
+    # volumes:
+    #   - .:/scraper-bot
+    depends_on:
+      - scrape_em_all_bot
+      - redis
+      - mongo
+  redis:
+    image: "redis:alpine"
+    ports:
+      - 6379:6379
+
+volumes:
+  mongodata:
