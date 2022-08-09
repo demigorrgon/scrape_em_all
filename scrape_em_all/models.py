@@ -62,8 +62,8 @@ class DouVacancies(BaseVacancy):
 #     }
 
 
-# class WorkVacancies(DjinniVacancies):
-#     meta = {
-#         "db_alias": "core",
-#         "collection": "workua",
-#     }
+class WorkVacancies(BaseVacancy):
+    meta = {
+        "db_alias": "core",
+        "collection": "workua",
+    }

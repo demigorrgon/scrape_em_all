@@ -11,7 +11,7 @@ from scrape_em_all.helpers import (
     date_in_ukrainian_to_datetime,
     get_user_or_exception,
 )
-from scrape_em_all.models import DjinniVacancies, DouVacancies
+from scrape_em_all.models import DjinniVacancies, DouVacancies, WorkVacancies
 
 
 class DjinniScraper:
@@ -163,12 +163,81 @@ class DouScraper(DjinniScraper):
         return re.sub(r"\xa0|\n", " ", string)
 
 
-# if __name__ == "__main__":
-#     # start = datetime.now()
-#     djinni = DjinniScraper(telegram_username="demigorrgon")
-# dou = DouScraper(telegram_username="demigorrgon")
-#     asyncio.run(djinni.fetch())
-# asyncio.run(dou.fetch())
+class WorkuaScraper(DjinniScraper):
+    def __init__(self, telegram_username: str) -> None:
+        super().__init__(telegram_username)
+        self.url = "https://www.work.ua/jobs-python/?advs=1&page="
 
-# end = datetime.now()
-# print(f"Finished in: {end-start}")
+    async def fetch(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.url) as response:
+                page = await response.text()
+                soup = BeautifulSoup(page, "html.parser")
+                pagination = soup.find_all("ul", {"class": "pagination hidden-xs"})[0]
+                last_page_number: str = re.findall(r"[0-9]+", pagination.text.strip())[
+                    -1
+                ]
+                tasks = []
+                for page in range(1, int(last_page_number) + 1):
+                    task = asyncio.create_task(self.fetch_paginated_page(session, page))
+                    tasks.append(task)
+                parsed_data = await asyncio.gather(*tasks)
+                for parsed_page in parsed_data:
+                    for ad in parsed_page:
+                        ads_tuple = namedtuple("ads", "title link description date")
+                        data = ads_tuple(ad[0], ad[1], ad[2], ad[3])
+                        if check_if_parsed_entry_exists_in_db(
+                            WorkVacancies, self.user, ad
+                        ):
+                            continue
+                        new_workua_vacancy = WorkVacancies(
+                            parsed_by=self.user,
+                            title=data.title,
+                            link=data.link,
+                            short_description=data.description,
+                            ad_posted_at=date_in_ukrainian_to_datetime(data.date),
+                        )
+                        new_workua_vacancy.save()
+                        if self.user.has_parsed_workua:
+                            # send notifications only after initial parse
+                            await bot.send_message(
+                                self.user.telegram_id,
+                                f"Found new vacancy: \n{data.title}\nposted at: {data.date}\nwhttps://work.ua/{data.link}\n{data.description}",
+                            )
+                self.user.has_parsed_workua = True
+                self.user.save()
+                return
+
+    async def fetch_paginated_page(
+        self, session: aiohttp.ClientSession, page_number: str
+    ):
+        async with session.get(self.url + str(page_number)) as page_response:
+            page = await page_response.text()
+            soup = BeautifulSoup(page, "html.parser")
+            header = soup.find_all(
+                "div", {"class": "card card-hover card-visited wordwrap job-link"}
+            )
+            bodies = soup.find_all(
+                "p", {"class": "overflow text-muted add-top-sm cut-bottom"}
+            )
+            titles = []
+            links = []
+            dates = []
+            descriptions = []
+
+            for title in header:
+                title_payload = re.findall(r'<h2 class="">\n.+\n<\/h2>', str(title))[0]
+                cleaned_link = re.findall(r"\/[a-z]+\/[a-z0-9]+\/", title_payload)[0]
+                cleaned_date = re.findall(r"[0-9]+\s[а-я]+\s[0-9]{4}", title_payload)[0]
+                cleaned_title = title_payload.split("title=")[1].split(",")[0][1:]
+                titles.append(cleaned_title)
+                links.append(cleaned_link)
+                dates.append(cleaned_date)
+
+            for description in bodies:
+                cleaned_body = re.sub(
+                    r"\n\s+|\s+|\xa0|\u2060", " ", description.text.strip()
+                )
+                descriptions.append(cleaned_body)
+
+            return list(zip(titles, links, descriptions, dates))
